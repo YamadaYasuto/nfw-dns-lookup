@@ -10,16 +10,51 @@ func Test_isValidIPv4(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{name: "valid IP", input: "192.168.1.1", want: true},                       // valid IP
-		{name: "network address, still valid IP", input: "10.0.0.0", want: true},   // network address, still valid IP
-		{name: "broadcast address", input: "255.255.255.255", want: true},          // broadcast address
-		{name: "network address, still valid IP", input: "0.0.0.0", want: true},    // network address, still valid IP
-		{name: "CIDR notation, not bare IP", input: "192.168.1.1/24", want: false}, // CIDR notation, not bare IP
-		{name: "octet > 255", input: "256.0.0.1", want: false},                     // octet > 255
-		{name: "missing octet", input: "192.168.1", want: false},                   // missing octet
-		{name: "IPv6", input: "::1", want: false},                                  // IPv6
-		{name: "empty string", input: "", want: false},                             // empty string
-		{name: "CIDR notation, not bare IP", input: "192.168.1.1/24", want: false}, // CIDR notation, not bare IP
+		{
+			name:  "有効なIPv4",
+			input: "192.168.1.1",
+			want:  true,
+		},
+		{
+			name:  "ネットワークアドレスでも有効なIPv4",
+			input: "10.0.0.0",
+			want:  true,
+		},
+		{
+			name:  "ブロードキャストアドレスでも有効なIPv4",
+			input: "255.255.255.255",
+			want:  true,
+		},
+		{
+			name:  "0.0.0.0も有効なIPv4",
+			input: "0.0.0.0",
+			want:  true,
+		},
+		{
+			name:  "CIDR表記は無効",
+			input: "192.168.1.1/24",
+			want:  false,
+		},
+		{
+			name:  "オクテットが255超は無効",
+			input: "256.0.0.1",
+			want:  false,
+		},
+		{
+			name:  "オクテット不足は無効",
+			input: "192.168.1",
+			want:  false,
+		},
+		{
+			name:  "IPv6は無効",
+			input: "::1",
+			want:  false,
+		},
+		{
+			name:  "空文字は無効",
+			input: "",
+			want:  false,
+		},
 	}
 
 	for _, d := range data {
