@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -21,14 +20,8 @@ var (
 	nfwClient             *networkfirewall.Client
 )
 
-type Response struct {
-	StatusCode int    `json:"statusCode"`
-	Body       string `json:"body"`
-}
-
-func handler(ctx context.Context) (Response, error) {
-
-	// 0. 環境変数とAWS設定を読み込む
+// エントリーポイント
+func main() {
 
 	// 環境変数からドメインとルールグループ名を取得
 	domain = os.Getenv("DOMAIN")
@@ -45,13 +38,18 @@ func handler(ctx context.Context) (Response, error) {
 	}
 	nfwClient = networkfirewall.NewFromConfig(cfg)
 
+	// ハンドラーを起動
+	lambda.Start(handler)
+}
+
+func handler(ctx context.Context) error {
+
 	// 1. DNSクエリでIPアドレスを取得
 
 	// DNSクエリを実行
 	ips, err := net.LookupHost(domain)
 	if err != nil {
-		log.Printf("Dns lookup failed: %v", err)
-		return Response{}, err
+		return fmt.Errorf("DNS lookup failed: %w", err)
 	}
 	log.Printf("Domain maps to following IPs: %v", ips)
 
@@ -68,36 +66,34 @@ func handler(ctx context.Context) (Response, error) {
 
 	// 有効なIPv4アドレスが一つもなければエラーを返す
 	if len(resolved) == 0 {
-		log.Printf("The Domain: %s doesn't have any valid IPv4 addresses", domain)
-		return Response{}, fmt.Errorf("no valid IPv4 addresses found %s", domain)
+		return fmt.Errorf("no valid IPv4 addresses found %s", domain)
 	}
 
 	// 2. 既存のNetworkFirewallに設定しているIPアドレスを取得
 
 	// ルールグループの取得に必要なパラメータを設定
-	decribeParams := networkfirewall.DescribeRuleGroupInput{
+	describeParams := networkfirewall.DescribeRuleGroupInput{
 		RuleGroupName: aws.String(statefulRuleGroupName),
 		Type:          types.RuleGroupTypeStateful,
 	}
 
 	// ルールグループを取得
-	out, err := nfwClient.DescribeRuleGroup(ctx, &decribeParams)
+	out, err := nfwClient.DescribeRuleGroup(ctx, &describeParams)
 	if err != nil {
-		log.Printf("Describe rule group failed: %v", err)
-		return Response{}, err
+		return fmt.Errorf("Describe rule group failed: %w", err)
 	}
 
 	// ルールグループのルール変数からIPアドレスを取得
 	if out.RuleGroup == nil {
-		return Response{}, fmt.Errorf("rule group not found")
+		return fmt.Errorf("Rule group not found")
 	}
 	ruleVars := out.RuleGroup.RuleVariables
 	if ruleVars == nil || ruleVars.IPSets == nil {
-		return Response{}, fmt.Errorf("rule group has no RuleVariables or IPSets")
+		return fmt.Errorf("Rule group has no RuleVariables or IPSets")
 	}
 	ipSet, ok := ruleVars.IPSets["IP_NET"]
 	if !ok {
-		return Response{}, fmt.Errorf("IP_NET IPSet not found in RuleVariables.IPSets")
+		return fmt.Errorf("IP_NET IPSet not found in RuleVariables.IPSets")
 	}
 	existing := ipSet.Definition
 	log.Printf("Existing IPs: %v", existing)
@@ -107,10 +103,7 @@ func handler(ctx context.Context) (Response, error) {
 	// 更新がなければ終了
 	if sameIPSet(resolved, existing) {
 		log.Printf("No changes needed, skipping update")
-		return Response{
-			StatusCode: 200,
-			Body:       "No changes needed",
-		}, nil
+		return nil
 	}
 
 	// IPアドレスを更新
@@ -136,32 +129,25 @@ func handler(ctx context.Context) (Response, error) {
 	// IP_NETルール変数を更新(インプレース)
 	_, err = nfwClient.UpdateRuleGroup(ctx, &updateParams)
 	if err != nil {
-		log.Printf("Update rule group failed: %v", err)
-		return Response{}, err
+		return fmt.Errorf("Update rule group failed: %w", err)
 	}
 	log.Printf("Rule group updated successfully")
 
-	body, _ := json.Marshal(fmt.Sprintf(
-		"Domain %s successfully resolved and the Network Firewall rule group has been updated.",
-		domain,
-	))
-	return Response{
-		StatusCode: 200,
-		Body:       string(body),
-	}, nil
+	return nil
 }
 
 // ヘルパー関数: IPv4のバリデーション
+// 有効なIPv4アドレスの場合はtrueを返す 無効な場合はfalseを返す
 func isValidIPv4(s string) bool {
 
-	// IPv4 or IPv6ではない場合はnilを返す
+	// net.ParseIPでIPアドレスを解析
 	ip := net.ParseIP(s)
 
-	// IPv4以外はfalseを返す
 	return ip != nil && ip.To4() != nil
 }
 
-// ヘルパー関数関数: 既存のIPアドレスとDNSクエリ結果を比較
+// ヘルパー関数: 既存のIPアドレスとDNSクエリ結果を比較
+// 既存のIPアドレスとDNSクエリ結果が同じ場合はtrueを返す 異なればfalseを返す
 func sameIPSet(resolved, existing []string) bool {
 
 	// resolvedのIPアドレスの重複を削除
@@ -189,9 +175,4 @@ func sameIPSet(resolved, existing []string) bool {
 	}
 
 	return true
-}
-
-// エントリーポイント
-func main() {
-	lambda.Start(handler)
 }
