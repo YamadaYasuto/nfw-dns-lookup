@@ -14,19 +14,22 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/networkfirewall/types"
 )
 
-// パッケージ変数
+// main関数で初期化する変数
+// これらの変数はハンドラー関数から参照できるようにする
 var (
-	domain                string // ドメイン名
-	statefulRuleGroupName string // NetworkFirewallのルールグループ名
-	nfwClient             *networkfirewall.Client // NetworkFirewallのクライアント
+	domain                string
+	statefulRuleGroupName string
+	nfwClient             *networkfirewall.Client
 )
 
 // エントリーポイント
+// 環境変数からドメインとルールグループ名を取得
+// 起動時に一度だけ実行されるようにしてオーバーヘッドを削減する
 func main() {
-
-	// 環境変数からドメインとルールグループ名を取得
 	domain = os.Getenv("DOMAIN")
 	statefulRuleGroupName = os.Getenv("STATEFUL_RULE_GROUP_NAME")
+
+	// ドメインとルールグループ名が設定されていない場合は、ログを出力してプログラムを終了
 	if domain == "" || statefulRuleGroupName == "" {
 		log.Fatalf("DOMAIN and STATEFUL_RULE_GROUP_NAME must be set")
 	}
@@ -37,19 +40,21 @@ func main() {
 		// エラーが発生した場合は、ログを出力してプログラムを終了
 		log.Fatalf("Load AWS config failed: %v", err)
 	}
+
+	// NetworkFirewallのクライアントを初期化
 	nfwClient = networkfirewall.NewFromConfig(cfg)
 
-	// ハンドラーを起動
+	// ハンドラー関数の登録と、呼び出し処理の開始
 	lambda.Start(handler)
 }
 
-
 // ハンドラー関数
-// ドメインに対応するIPアドレスを取得し、NetworkFirewallに設定しているIPアドレスと比較し、
-// 異なる場合はNetworkFirewallに設定しているIPアドレスを更新する
+// 1. ドメインに対応するIPアドレスを取得
+// 2. NetworkFirewallに設定しているルール変数のIPアドレスを取得
+// 3. 比較して差分があれば更新。なければ更新せず終了
 func handler(ctx context.Context) error {
 
-	// 1. DNSクエリでIPアドレスを取得
+	// --- 1. ドメインに対応するIPアドレスを取得 ---
 
 	// DNSクエリを実行
 	ips, err := net.LookupHost(domain)
@@ -69,26 +74,27 @@ func handler(ctx context.Context) error {
 		resolved = append(resolved, ip+"/32")
 	}
 
-	// 有効なIPv4アドレスが一つもなければエラーを返す
+	// 有効なIPv4アドレスがない場合、更新するとホワイトリストが空になるためエラーを返す
 	if len(resolved) == 0 {
-		return fmt.Errorf("no valid IPv4 addresses found %s", domain)
+		return fmt.Errorf("no valid IPv4 addresses found for domain: %s", domain)
 	}
 
-	// 2. 既存のNetworkFirewallに設定しているIPアドレスを取得
+	// --- 2. NetworkFirewallに設定しているルール変数のIPアドレスを取得 ---
 
-	// ルールグループの取得に必要なパラメータを設定
+	// ルールグループ情報の取得に必要なパラメータを設定
 	describeParams := networkfirewall.DescribeRuleGroupInput{
 		RuleGroupName: aws.String(statefulRuleGroupName),
 		Type:          types.RuleGroupTypeStateful,
 	}
 
-	// ルールグループを取得
+	// ルールグループ情報を取得
 	out, err := nfwClient.DescribeRuleGroup(ctx, &describeParams)
 	if err != nil {
 		return fmt.Errorf("Describe rule group failed: %w", err)
 	}
 
-	// ルールグループのルール変数からIPアドレスを取得
+	// ルールグループのルール変数からIP_NETのIPアドレスを取得
+	// nil参照の場合、panicではなく明示的にエラーを返す
 	if out.RuleGroup == nil {
 		return fmt.Errorf("Rule group not found")
 	}
@@ -96,14 +102,15 @@ func handler(ctx context.Context) error {
 	if ruleVars == nil || ruleVars.IPSets == nil {
 		return fmt.Errorf("Rule group has no RuleVariables or IPSets")
 	}
-	ipSet, ok := ruleVars.IPSets["IP_NET"]
+	whitelist, ok := ruleVars.IPSets["IP_NET"]
+	// IP_NETが設定されていない場合、エラーを返す
 	if !ok {
 		return fmt.Errorf("IP_NET IPSet not found in RuleVariables.IPSets")
 	}
-	existing := ipSet.Definition
+	existing := whitelist.Definition
 	log.Printf("Existing IPs: %v", existing)
 
-	// 3. DNSクエリ結果と既存のIPアドレスを比較
+	// --- 3. 比較して差分があれば更新。なければ更新せず終了 ---
 
 	// 差分がなければ更新をスキップして終了
 	if sameIPSet(resolved, existing) {
@@ -111,12 +118,14 @@ func handler(ctx context.Context) error {
 		return nil
 	}
 
-	// IPアドレスを更新
 	log.Printf("Replacing IP set: %v -> %v", existing, resolved)
 
 	// DNSクエリ結果をIP_NETルール変数に設定
-	ipSet.Definition = resolved
-	ruleVars.IPSets["IP_NET"] = ipSet
+	// IPSetsはmap[string]types.IPSetのため、一度IPSet型の変数(whitelist)に書き込み、その後mapに代入する
+	// 注意）map内のstructのfieldは直接代入できない
+	// e.g., ruleVars.IPSets["IP_NET"].Definition = resolved // コンパイルエラー
+	whitelist.Definition = resolved
+	ruleVars.IPSets["IP_NET"] = whitelist
 
 	// ルールグループの更新に必要なパラメータを設定
 	updateParams := networkfirewall.UpdateRuleGroupInput{
@@ -131,7 +140,7 @@ func handler(ctx context.Context) error {
 		DryRun: false,
 	}
 
-	// IP_NETルール変数を更新(インプレース)
+	// IP_NETルール変数を更新
 	_, err = nfwClient.UpdateRuleGroup(ctx, &updateParams)
 	if err != nil {
 		return fmt.Errorf("Update rule group failed: %w", err)
@@ -152,7 +161,8 @@ func isValidIPv4(s string) bool {
 }
 
 // ヘルパー関数: 既存のIPアドレスとDNSクエリ結果を比較
-// 既存のIPアドレスとDNSクエリ結果が同じ場合はtrueを返す 異なればfalseを返す
+// 同じ場合はtrue、異なればfalseを返す
+// なお、resolvedとexistingの順番は考慮しない
 func sameIPSet(resolved, existing []string) bool {
 
 	// resolvedのIPアドレスの重複を削除
