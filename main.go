@@ -14,10 +14,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/networkfirewall/types"
 )
 
+// パッケージ変数
 var (
-	domain                string
-	statefulRuleGroupName string
-	nfwClient             *networkfirewall.Client
+	domain                string // ドメイン名
+	statefulRuleGroupName string // NetworkFirewallのルールグループ名
+	nfwClient             *networkfirewall.Client // NetworkFirewallのクライアント
 )
 
 // エントリーポイント
@@ -42,6 +43,10 @@ func main() {
 	lambda.Start(handler)
 }
 
+
+// ハンドラー関数
+// ドメインに対応するIPアドレスを取得し、NetworkFirewallに設定しているIPアドレスと比較し、
+// 異なる場合はNetworkFirewallに設定しているIPアドレスを更新する
 func handler(ctx context.Context) error {
 
 	// 1. DNSクエリでIPアドレスを取得
@@ -100,7 +105,7 @@ func handler(ctx context.Context) error {
 
 	// 3. DNSクエリ結果と既存のIPアドレスを比較
 
-	// 更新がなければ終了
+	// 差分がなければ更新をスキップして終了
 	if sameIPSet(resolved, existing) {
 		log.Printf("No changes needed, skipping update")
 		return nil
