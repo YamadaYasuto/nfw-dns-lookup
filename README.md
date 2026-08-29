@@ -1,15 +1,14 @@
 # nfw-dns-lookup
 
-ドメインの DNS を解決し、AWS Network Firewall の Stateful Rule Group（`IP_NET`）を IPv4 の結果で更新する Lambda 関数です。
-
-
+特定ドメインの DNS を解決し、AWS Network Firewall の Stateful Rule Group（`IP_NET`）を IPv4 の結果で更新する Lambda 関数用のコードです。
+AWSのNetwork Firewallを使って、non-HTTPS/non-HTTP通信のドメインフィルタリングを行いたい場合、このソリューションを利用できます。
 
 ## 前提環境
 
 ### Windows の場合
 
 本リポジトリのビルド・テストは **Linux 前提** です。  
-Windows ネイティブではなく、**WSL2** 上で作業してください。
+Windows の場合は、**WSL2** 上で作業してください。
 
 1. PowerShell（管理者）で WSL をインストールします。
 
